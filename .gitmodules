@@ -9,4 +9,4 @@
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
 [submodule "lib/p256-account"]
 	path = lib/p256-account
-	url = git@github.com:CrypleLLC/p256-account.git
+	url = https://github.com/CrypleLLC/p256-account.git
