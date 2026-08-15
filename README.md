@@ -149,6 +149,36 @@ Tests cover the full state machine, both permission boundaries, the revocation p
 enforcement, the privacy rule above, and a fuzz over period configuration asserting the switch never
 releases early.
 
+## Gas sponsorship
+
+The account is an ERC-4337 account bound to **EntryPoint v0.9** at
+`0x433709009B8330FDa32311DF1C2AFA402eD8D009` — the address OpenZeppelin's `Account` returns, the
+version this repository vendors, and a contract that is deployed on Arbitrum Sepolia. Pimlico's
+public bundler for chain 421614 lists it in `eth_supportedEntryPoints`, so no change to the account
+is needed to use a hosted bundler or sponsorship policy.
+
+[`test/SponsoredCheckIn.t.sol`](test/SponsoredCheckIn.t.sol) proves the mechanism against the **live
+chain** rather than a local EntryPoint: an account holding zero wei, with no deposit of its own,
+configures and checks in while a paymaster pays. It also asserts the account's balance and deposit
+are still zero afterwards, so a passing test cannot mean "it quietly paid for itself".
+
+```bash
+forge test --match-contract SponsoredCheckIn    # needs ARBITRUM_SEPOLIA_RPC_URL
+```
+
+The test skips itself when that variable is unset, so `forge test` stays green on a machine or CI
+job without an endpoint.
+
+### An account must always be able to pay for itself
+
+Sponsorship is not only a convenience here — its failure points the wrong way. A user who cannot
+check in looks exactly like a user who has died: after `inactivityPeriod` anyone may `trigger()`,
+and the switch fires on a living owner. So the unsponsored path is a **safety requirement**, not a
+fallback of last resort. The EntryPoint charges the account directly when `paymasterAndData` is
+empty, which needs no extra contract, and
+`test_AnUnsponsoredAccountCanStillCheckInFromItsOwnDeposit` pins that it works. This is limitation
+**L7** in the architecture document.
+
 ## Deployment
 
 Configuration lives in two places: the network aliases and verification keys in
