@@ -116,6 +116,44 @@ Tests cover the full state machine, both permission boundaries, the revocation p
 enforcement, the privacy rule above, and a fuzz over period configuration asserting the switch never
 releases early.
 
+## Deployment
+
+Configuration lives in two places: the network aliases and verification keys in
+[`foundry.toml`](foundry.toml), and the secrets they expand, which are listed in
+[`.env.example`](.env.example). Copy it to `.env` and fill it in; `forge` loads `.env` from the
+repository root automatically.
+
+| Variable | Used by | Notes |
+| --- | --- | --- |
+| `ARBITRUM_SEPOLIA_RPC_URL` | `--rpc-url arbitrum_sepolia` | Public endpoint works; a keyed provider is steadier for `--verify` |
+| `ARBITRUM_ONE_RPC_URL` | `--rpc-url arbitrum_one` | Production only |
+| `ARBISCAN_API_KEY` | `--verify` | An Etherscan V2 key from etherscan.io covers Arbiscan on both chains |
+| `DEPLOYER_ACCOUNT` | `--account` | Keystore alias created by `cast wallet import <name> --interactive` |
+| `DEPLOYER_PRIVATE_KEY` | `--private-key` | Alternative to the keystore; throwaway testnet keys only |
+| `PRODUCTION` | `Deploy.s.sol` | `true` selects the mainnet floors and rejects anything below them |
+| `MIN_INACTIVITY_SECONDS` | `Deploy.s.sol` | Optional override, seconds |
+| `MIN_CONTEST_SECONDS` | `Deploy.s.sol` | Optional override, seconds |
+
+The deployer is a plain EOA that signs the two `CREATE` transactions and nothing else. It is
+unrelated to any user's P-256 key and holds no authority over `DeadManSwitch` or `ProofRegistry`
+once they exist — neither contract has an owner, an admin, or an upgrade path.
+
+```bash
+forge script script/Deploy.s.sol \
+  --rpc-url arbitrum_sepolia \
+  --account $DEPLOYER_ACCOUNT \
+  --broadcast --verify
+```
+
+Drop `--broadcast` for a dry run: the script still prints the addresses it would create and the
+minimum periods in force. Both must be copied into the deployment record, along with the values
+printed for `production`, `minInactivityPeriod` and `minContestPeriod` — they are constructor
+arguments and cannot be changed after broadcast.
+
+`--verify` submits every contract the script broadcasts, which here is both of them. The account
+factory in [`p256-account`](../p256-account) is deployed separately and does not have that property;
+see its README.
+
 ## Status
 
 **Unaudited, nothing deployed.** The deployment record lives in

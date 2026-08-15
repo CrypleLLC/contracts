@@ -12,6 +12,14 @@ remappings = [
     "p256-account/=lib/p256-account/src/",
 ]
 
+[rpc_endpoints]
+arbitrum_sepolia = "${ARBITRUM_SEPOLIA_RPC_URL}"
+arbitrum_one = "${ARBITRUM_ONE_RPC_URL}"
+
+[etherscan]
+arbitrum_sepolia = { key = "${ARBISCAN_API_KEY}", chain = 421614 }
+arbitrum_one = { key = "${ARBISCAN_API_KEY}", chain = 42161 }
+
 [fuzz]
 runs = 512
 

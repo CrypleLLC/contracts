@@ -14,8 +14,13 @@ import {ProofRegistry} from "../src/ProofRegistry.sol";
 // them during a holiday. The values in force are printed and MUST be copied into
 // the deployment record in .docs/onchain-architecture.md.
 //
+// Environment: see .env.example. The rpc-url is the alias declared in
+// foundry.toml, which resolves ARBITRUM_SEPOLIA_RPC_URL and carries the
+// Arbiscan key and chain id that --verify needs.
+//
 //   forge script script/Deploy.s.sol \
-//     --rpc-url $ARBITRUM_SEPOLIA_RPC_URL \
+//     --rpc-url arbitrum_sepolia \
+//     --account $DEPLOYER_ACCOUNT \
 //     --broadcast --verify
 contract Deploy is Script {
     uint32 public constant MAINNET_MIN_INACTIVITY = 30 days;
