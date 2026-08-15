@@ -91,6 +91,8 @@ contract DeadManSwitch {
         Record storage record = _records[msg.sender];
         if (record.status == Status.Released) revert AlreadyReleased();
 
+        bool wasContesting = record.status == Status.Contest;
+
         record.inactivityPeriod = inactivityPeriod;
         record.contestPeriod = contestPeriod;
         record.guardianRoot = guardianRoot;
@@ -99,11 +101,13 @@ contract DeadManSwitch {
         record.status = Status.Active;
         record.triggeredAt = 0;
 
+        if (wasContesting) emit Revoked(msg.sender, uint64(block.timestamp));
+
         emit Configured(msg.sender, inactivityPeriod, contestPeriod, guardianRoot, guardianThreshold);
         emit CheckedIn(msg.sender, uint64(block.timestamp));
     }
 
-    // Owner-only. During Contest this is the revocation mechanism.
+    // Owner-only. During Contest this revokes the pending release, as configure() also does.
     function checkIn() external {
         Record storage record = _records[msg.sender];
 

@@ -72,6 +72,73 @@ contract DeadManSwitchTest is Test {
         dms.finalize(owner);
     }
 
+    // The second revocation path. It must be indistinguishable from checkIn() to
+    // anything watching events, or an indexer keying off Revoked leaves a live
+    // owner displayed as counting down.
+    function test_ConfigureDuringContestRevokes() public {
+        vm.warp(block.timestamp + INACTIVITY + 1);
+        vm.prank(stranger);
+        dms.trigger(owner);
+
+        vm.expectEmit(true, false, false, true, address(dms));
+        emit DeadManSwitch.Revoked(owner, uint64(block.timestamp));
+
+        vm.prank(owner);
+        dms.configure(INACTIVITY, CONTEST, GUARDIAN_ROOT, 2);
+
+        DeadManSwitch.Record memory record = dms.recordOf(owner);
+        assertEq(uint8(record.status), uint8(DeadManSwitch.Status.Active));
+        assertEq(record.triggeredAt, 0);
+
+        vm.warp(block.timestamp + CONTEST + 1);
+        vm.expectRevert(DeadManSwitch.NotContesting.selector);
+        dms.finalize(owner);
+    }
+
+    // Revoked must precede the events describing the new configuration, so an
+    // indexer replaying the log in order never writes counting_down after it.
+    function test_RevokedPrecedesConfiguredAndCheckedIn() public {
+        vm.warp(block.timestamp + INACTIVITY + 1);
+        vm.prank(stranger);
+        dms.trigger(owner);
+
+        vm.recordLogs();
+        vm.prank(owner);
+        dms.configure(INACTIVITY, CONTEST, GUARDIAN_ROOT, 2);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 3);
+        assertEq(logs[0].topics[0], DeadManSwitch.Revoked.selector);
+        assertEq(logs[1].topics[0], DeadManSwitch.Configured.selector);
+        assertEq(logs[2].topics[0], DeadManSwitch.CheckedIn.selector);
+    }
+
+    function test_ConfigureOutsideContestDoesNotEmitRevoked() public {
+        vm.recordLogs();
+        vm.prank(owner);
+        dms.configure(INACTIVITY, CONTEST, GUARDIAN_ROOT, 2);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 2);
+        for (uint256 i = 0; i < logs.length; i++) {
+            assertTrue(logs[i].topics[0] != DeadManSwitch.Revoked.selector, "no release was pending to revoke");
+        }
+    }
+
+    function test_FirstConfigureDoesNotEmitRevoked() public {
+        vm.recordLogs();
+        vm.prank(stranger);
+        dms.configure(INACTIVITY, CONTEST, bytes32(0), 0);
+
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 2);
+        for (uint256 i = 0; i < logs.length; i++) {
+            assertTrue(
+                logs[i].topics[0] != DeadManSwitch.Revoked.selector, "an unconfigured record has nothing to revoke"
+            );
+        }
+    }
+
     // The invariant the whole trust model rests on: nobody but the account may check in.
     function test_OnlyTheOwnerCanCheckIn() public {
         vm.warp(block.timestamp + 10 days);

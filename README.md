@@ -44,7 +44,7 @@ Unconfigured ──configure()──▶ Active ──trigger()──▶ Contest 
 
 | Function | Caller | Effect |
 | --- | --- | --- |
-| `configure(...)` | **owner account only** | Sets periods and the guardian commitment; refreshes the clock |
+| `configure(...)` | **owner account only** | Sets periods and the guardian commitment; refreshes the clock. During `Contest` this also **revokes** |
 | `checkIn()` | **owner account only** | Refreshes the clock. During `Contest` this is the **revocation** |
 | `trigger(owner)` | **anyone** | Only after `lastCheckIn + inactivityPeriod` |
 | `finalize(owner)` | **anyone** | Only after `triggeredAt + contestPeriod` |
@@ -64,6 +64,18 @@ mode the on-chain layer exists to remove. A premature call reverts and the calle
 `Released` is terminal. There is no undo, because an undo function would be an attack surface aimed
 at the exact moment the owner can no longer defend themselves. The contest period is the protection
 instead.
+
+### There are two revocation paths, and both emit `Revoked`
+
+`checkIn()` is the documented revocation, but `configure()` resets a record from any status except
+`Released`, so an owner who reconfigures during `Contest` also cancels the pending release. Both
+paths emit `Revoked`, so **an indexer can key off that one event and be complete** — it does not
+need to treat `Configured` as a possible revocation or reconcile against `statusOf()`.
+
+When `configure()` revokes, `Revoked` is emitted **before** `Configured` and `CheckedIn`, so a
+consumer replaying the log in order can never write a countdown state after the cancellation that
+ended it. `test_RevokedPrecedesConfiguredAndCheckedIn` pins the order; two further tests pin that
+no `Revoked` is emitted when there was no pending release to cancel.
 
 ### Minimum periods are a deployment constant
 
