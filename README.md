@@ -89,8 +89,29 @@ mapping(account => mapping(epoch => root))  // epoch = unixSeconds / 86400
 the root of *tampered* data, and the heir's verification would then pass against the tampered blob —
 silently destroying the exact guarantee the registry exists to provide. The relayer may only relay.
 
-Older epochs are never overwritten, so an anchor stays provable forever. Re-anchoring within the
-current epoch is expected, since the vault changes during the day.
+### A closed epoch is frozen
+
+Once an epoch ends, the root recorded for it can never be restated — `anchor` reverts with
+`EpochAlreadyAnchored` on any write to a past epoch that already holds a root, including a write of
+the identical root. This is what makes an inclusion proof durable: an heir holding a valid proof
+against the epoch-N root cannot have it invalidated afterwards. `test_RewritingAnOccupiedPastEpochIsRejected`
+and `testFuzz_AClosedEpochNeverChanges` pin it.
+
+Two writes stay legal, and neither rewrites history:
+
+- **Re-anchoring within the current epoch**, which is expected — the vault changes during the day.
+  Today's root is mutable and freezes at midnight (`test_TodaysRootFreezesWhenItsEpochCloses`).
+- **Backfilling a past epoch that was never used**, which is not an overwrite. The client depends on
+  it: an anchor submitted at 23:59 may be mined after midnight, and rejecting it would burn a
+  sponsored userOp for a clock race.
+
+Only the owner's own account can anchor, so this was never reachable by a compromised backend. It
+was reachable by anyone holding the owner's key, and the guarantee as documented is unconditional —
+so the code now enforces it rather than the document describing an intention.
+
+**Client consequence.** If an anchor for epoch N is mined after epoch N closed *and* N already holds
+a root, the transaction reverts. The client must treat `EpochAlreadyAnchored` as "re-anchor at the
+current epoch", not as an error to surface.
 
 ## Privacy rules
 

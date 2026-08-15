@@ -73,6 +73,106 @@ contract ProofRegistryTest is Test {
         assertEq(root, ROOT_B);
     }
 
+    // The guarantee the registry exists to provide: once an epoch closes, the
+    // root recorded for it can never be restated. An heir holding a valid
+    // inclusion proof against it cannot have that proof invalidated later.
+    function test_RewritingAnOccupiedPastEpochIsRejected() public {
+        uint64 first = registry.currentEpoch();
+
+        vm.prank(alice);
+        registry.anchor(first, ROOT_A);
+
+        vm.warp(block.timestamp + 1 days);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ProofRegistry.EpochAlreadyAnchored.selector, first, ROOT_A));
+        registry.anchor(first, ROOT_B);
+
+        assertEq(registry.rootAt(alice, first), ROOT_A, "a closed epoch must keep its original root");
+    }
+
+    // Re-submitting the identical root is rejected too. Nothing in the product
+    // needs it, and an exemption would be a second write path into closed
+    // history to reason about.
+    function test_RewritingAnOccupiedPastEpochIsRejectedEvenWithTheSameRoot() public {
+        uint64 first = registry.currentEpoch();
+
+        vm.prank(alice);
+        registry.anchor(first, ROOT_A);
+
+        vm.warp(block.timestamp + 3 days);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ProofRegistry.EpochAlreadyAnchored.selector, first, ROOT_A));
+        registry.anchor(first, ROOT_A);
+    }
+
+    // Today's root is still mutable, and stops being so at midnight.
+    function test_TodaysRootFreezesWhenItsEpochCloses() public {
+        uint64 today = registry.currentEpoch();
+
+        vm.startPrank(alice);
+        registry.anchor(today, ROOT_A);
+        registry.anchor(today, ROOT_B);
+        vm.stopPrank();
+
+        assertEq(registry.rootAt(alice, today), ROOT_B);
+
+        vm.warp(block.timestamp + 1 days);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ProofRegistry.EpochAlreadyAnchored.selector, today, ROOT_B));
+        registry.anchor(today, keccak256("too-late"));
+    }
+
+    // Writing an epoch that was never used is not a rewrite, and the client
+    // depends on it: an anchor submitted at 23:59 can be mined after midnight.
+    function test_BackfillingAnEmptyPastEpochIsAllowed() public {
+        uint64 first = registry.currentEpoch();
+
+        vm.prank(alice);
+        registry.anchor(first, ROOT_A);
+
+        vm.warp(block.timestamp + 4 days);
+
+        vm.prank(alice);
+        registry.anchor(first + 2, ROOT_B);
+
+        assertEq(registry.rootAt(alice, first + 2), ROOT_B);
+        assertEq(registry.rootAt(alice, first), ROOT_A);
+    }
+
+    function test_FreezingIsPerAccount() public {
+        uint64 first = registry.currentEpoch();
+
+        vm.prank(alice);
+        registry.anchor(first, ROOT_A);
+
+        vm.warp(block.timestamp + 1 days);
+
+        vm.prank(bob);
+        registry.anchor(first, ROOT_B);
+
+        assertEq(registry.rootAt(alice, first), ROOT_A);
+        assertEq(registry.rootAt(bob, first), ROOT_B);
+    }
+
+    function testFuzz_AClosedEpochNeverChanges(bytes32 attempt, uint8 daysLater) public {
+        vm.assume(attempt != bytes32(0));
+        uint64 first = registry.currentEpoch();
+
+        vm.prank(alice);
+        registry.anchor(first, ROOT_A);
+
+        vm.warp(block.timestamp + (uint256(daysLater) + 1) * 1 days);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ProofRegistry.EpochAlreadyAnchored.selector, first, ROOT_A));
+        registry.anchor(first, attempt);
+
+        assertEq(registry.rootAt(alice, first), ROOT_A);
+    }
+
     function test_BackdatedAnchorDoesNotMoveTheLatestPointer() public {
         uint64 first = registry.currentEpoch();
         vm.prank(alice);

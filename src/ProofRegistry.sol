@@ -11,6 +11,7 @@ contract ProofRegistry {
 
     error EmptyRoot();
     error EpochInTheFuture(uint64 epoch, uint64 currentEpoch);
+    error EpochAlreadyAnchored(uint64 epoch, bytes32 existingRoot);
 
     // Owner-signed only. A relayer authorised to anchor could anchor the root of
     // tampered data, and the heir's verification would then pass against it.
@@ -19,6 +20,11 @@ contract ProofRegistry {
 
         uint64 current = currentEpoch();
         if (epoch > current) revert EpochInTheFuture(epoch, current);
+
+        if (epoch < current) {
+            bytes32 existing = _roots[msg.sender][epoch];
+            if (existing != bytes32(0)) revert EpochAlreadyAnchored(epoch, existing);
+        }
 
         _roots[msg.sender][epoch] = root;
         if (epoch > _latestEpoch[msg.sender]) {
