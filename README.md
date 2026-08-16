@@ -13,10 +13,10 @@ key sign transactions without a wallet, a browser extension, or a second curve.
 
 ## Contracts
 
-| Contract | Purpose |
-| --- | --- |
+| Contract        | Purpose                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------ |
 | `DeadManSwitch` | One record per account: timers, status, guardian commitment. Singleton keyed by account address. |
-| `ProofRegistry` | One Merkle root per (account, epoch), anchoring vault-item hashes. Singleton. |
+| `ProofRegistry` | One Merkle root per (account, epoch), anchoring vault-item hashes. Singleton.                    |
 
 The account layer — the ERC-4337 smart account and its P-256 validator — lives in
 [`p256-account`](../p256-account), a separate MIT-licensed repository with no dependency on
@@ -42,12 +42,12 @@ Unconfigured ──configure()──▶ Active ──trigger()──▶ Contest 
                                └───┴───checkIn()───────┘
 ```
 
-| Function | Caller | Effect |
-| --- | --- | --- |
-| `configure(...)` | **owner account only** | Sets periods and the guardian commitment; refreshes the clock. During `Contest` this also **revokes** |
-| `checkIn()` | **owner account only** | Refreshes the clock. During `Contest` this is the **revocation** |
-| `trigger(owner)` | **anyone** | Only after `lastCheckIn + inactivityPeriod` |
-| `finalize(owner)` | **anyone** | Only after `triggeredAt + contestPeriod` |
+| Function          | Caller                 | Effect                                                                                                |
+| ----------------- | ---------------------- | ----------------------------------------------------------------------------------------------------- |
+| `configure(...)`  | **owner account only** | Sets periods and the guardian commitment; refreshes the clock. During `Contest` this also **revokes** |
+| `checkIn()`       | **owner account only** | Refreshes the clock. During `Contest` this is the **revocation**                                      |
+| `trigger(owner)`  | **anyone**             | Only after `lastCheckIn + inactivityPeriod`                                                           |
+| `finalize(owner)` | **anyone**             | Only after `triggeredAt + contestPeriod`                                                              |
 
 Two access decisions carry the trust model, and both are tested:
 
@@ -98,7 +98,7 @@ mapping(account => mapping(epoch => root))  // epoch = unixSeconds / 86400
   everywhere removes a class of client bugs.
 
 **Anchoring is signed by the user, not the backend.** A relayer authorised to anchor could anchor
-the root of *tampered* data, and the heir's verification would then pass against the tampered blob —
+the root of _tampered_ data, and the heir's verification would then pass against the tampered blob —
 silently destroying the exact guarantee the registry exists to provide. The relayer may only relay.
 
 ### A closed epoch is frozen
@@ -121,7 +121,7 @@ Only the owner's own account can anchor, so this was never reachable by a compro
 was reachable by anyone holding the owner's key, and the guarantee as documented is unconditional —
 so the code now enforces it rather than the document describing an intention.
 
-**Client consequence.** If an anchor for epoch N is mined after epoch N closed *and* N already holds
+**Client consequence.** If an anchor for epoch N is mined after epoch N closed _and_ N already holds
 a root, the transaction reverts. The client must treat `EpochAlreadyAnchored` as "re-anchor at the
 current epoch", not as an error to surface.
 
@@ -186,16 +186,16 @@ Configuration lives in two places: the network aliases and verification keys in
 [`.env.example`](.env.example). Copy it to `.env` and fill it in; `forge` loads `.env` from the
 repository root automatically.
 
-| Variable | Used by | Notes |
-| --- | --- | --- |
-| `ARBITRUM_SEPOLIA_RPC_URL` | `--rpc-url arbitrum_sepolia` | Public endpoint works; a keyed provider is steadier for `--verify` |
-| `ARBITRUM_ONE_RPC_URL` | `--rpc-url arbitrum_one` | Production only |
-| `ARBISCAN_API_KEY` | `--verify` | An Etherscan V2 key from etherscan.io covers Arbiscan on both chains |
-| `DEPLOYER_ACCOUNT` | `--account` | Keystore alias created by `cast wallet import <name> --interactive` |
-| `DEPLOYER_PRIVATE_KEY` | `--private-key` | Alternative to the keystore; throwaway testnet keys only |
-| `PRODUCTION` | `Deploy.s.sol` | `true` selects the mainnet floors and rejects anything below them |
-| `MIN_INACTIVITY_SECONDS` | `Deploy.s.sol` | Optional override, seconds |
-| `MIN_CONTEST_SECONDS` | `Deploy.s.sol` | Optional override, seconds |
+| Variable                   | Used by                      | Notes                                                                |
+| -------------------------- | ---------------------------- | -------------------------------------------------------------------- |
+| `ARBITRUM_SEPOLIA_RPC_URL` | `--rpc-url arbitrum_sepolia` | Public endpoint works; a keyed provider is steadier for `--verify`   |
+| `ARBITRUM_ONE_RPC_URL`     | `--rpc-url arbitrum_one`     | Production only                                                      |
+| `ARBISCAN_API_KEY`         | `--verify`                   | An Etherscan V2 key from etherscan.io covers Arbiscan on both chains |
+| `DEPLOYER_ACCOUNT`         | `--account`                  | Keystore alias created by `cast wallet import <name> --interactive`  |
+| `DEPLOYER_PRIVATE_KEY`     | `--private-key`              | Alternative to the keystore; throwaway testnet keys only             |
+| `PRODUCTION`               | `Deploy.s.sol`               | `true` selects the mainnet floors and rejects anything below them    |
+| `MIN_INACTIVITY_SECONDS`   | `Deploy.s.sol`               | Optional override, seconds                                           |
+| `MIN_CONTEST_SECONDS`      | `Deploy.s.sol`               | Optional override, seconds                                           |
 
 The deployer is a plain EOA that signs the two `CREATE` transactions and nothing else. It is
 unrelated to any user's P-256 key and holds no authority over `DeadManSwitch` or `ProofRegistry`
@@ -204,22 +204,55 @@ once they exist — neither contract has an owner, an admin, or an upgrade path.
 ```bash
 forge script script/Deploy.s.sol \
   --rpc-url arbitrum_sepolia \
-  --account $DEPLOYER_ACCOUNT \
-  --broadcast --verify
+  --account cryple-deployer \
+  --sender 0xYourDeployerAddress \
+  --broadcast
 ```
 
-Drop `--broadcast` for a dry run: the script still prints the addresses it would create and the
-minimum periods in force. Both must be copied into the deployment record, along with the values
-printed for `production`, `minInactivityPeriod` and `minContestPeriod` — they are constructor
-arguments and cannot be changed after broadcast.
+For a dry run, drop `--broadcast` and pass `--sender` alone — no password is needed, and the script
+still prints the addresses it would create, the gas estimate, and the minimum periods in force. Note
+that a dry run computes addresses from the sender's _current_ nonce, so they will not match the real
+deployment if anything else is broadcast in between.
 
-`--verify` submits every contract the script broadcasts, which here is both of them. The account
-factory in [`p256-account`](../p256-account) is deployed separately and does not have that property;
-see its README.
+Verify afterwards, explicitly — **`--verify` cannot be trusted here.** On the 2026-08-16 deployment
+it reported _"We haven't found any matching bytecode"_ and then _"All (0) contracts were verified!"_,
+exiting zero having submitted nothing. It has to infer which source produced each address by matching
+bytecode against build artifacts, and a failed match is not treated as an error.
+
+```bash
+forge verify-contract <DeadManSwitch> src/DeadManSwitch.sol:DeadManSwitch --chain 421614 --watch \
+  --constructor-args $(cast abi-encode "constructor(uint32,uint32)" 300 120)
+
+forge verify-contract <ProofRegistry> src/ProofRegistry.sol:ProofRegistry --chain 421614 --watch
+```
+
+`DeadManSwitch` needs its constructor arguments re-encoded with **the values actually used at
+broadcast**; `ProofRegistry` takes none. Neither command needs the deployer key — verification is an
+HTTPS POST of source code, not a transaction. Confirm the result on Arbiscan rather than trusting the
+CLI: an unverified contract returns an empty `SourceCode` field from
+`module=contract&action=getsourcecode`.
+
+The account factory in [`p256-account`](../p256-account) is deployed separately and has an additional
+wrinkle — its implementation is created inside the factory constructor and needs its own submission.
+See its README.
 
 ## Status
 
-**Unaudited, nothing deployed.** The deployment record lives in
+**Unaudited.** Deployed to Arbitrum Sepolia on 2026-08-16 from commit `db9582f`, compiler `v0.8.30`,
+optimizer enabled at 200 runs. Both contracts are verified on Arbiscan:
+
+| Contract        | Address                                                                                                                             | Constructor                               |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `DeadManSwitch` | [`0x6951a65CDc706A2D23E1015d35B8353F18A569a9`](https://sepolia.arbiscan.io/address/0x6951a65CDc706A2D23E1015d35B8353F18A569a9#code) | `minInactivity = 300`, `minContest = 120` |
+| `ProofRegistry` | [`0xd344197975C4D47f97dDB1d26b91a96be6e83930`](https://sepolia.arbiscan.io/address/0xd344197975C4D47f97dDB1d26b91a96be6e83930#code) | none                                      |
+
+**This deployment is for demonstration and testing only.** Its minimum periods are 300 and 120
+seconds, so a full `configure → trigger → contest → finalize` cycle completes in about seven minutes.
+They are constructor arguments with no upgrade path, so Arbitrum One requires a fresh deployment at
+the production floors — see [Minimum periods are a deployment
+constant](#minimum-periods-are-a-deployment-constant).
+
+The full deployment record lives in
 [`.docs/onchain-architecture.md`](../api-general/.docs/onchain-architecture.md#deployment-record)
 and must capture, per deployment: commit hash, compiler version and settings, constructor
 arguments, the minimum-period constants in force, and the Arbiscan verification link.
