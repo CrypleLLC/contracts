@@ -149,13 +149,108 @@ Tests cover the full state machine, both permission boundaries, the revocation p
 enforcement, the privacy rule above, and a fuzz over period configuration asserting the switch never
 releases early.
 
+## Counterfactual deployment through a bundler
+
+A user's smart account is not deployed at sign-up. Its address is derived, quoted, and only becomes
+a contract when the first UserOperation carries `initCode`. That path had never been exercised:
+every test called `factory.createAccount` directly and passed `initCode: ""`, so no bundler had ever
+judged the factory.
+
+Two things now cover it, and they answer different questions.
+
+**`test/CounterfactualDeployment.t.sol`** proves the encoding and the state transition against a
+local EntryPoint: one operation deploys the account and configures the switch, the deployed address
+is the one derived beforehand, the switch records the account rather than the relayer as caller, and
+a foreign key leaves nothing deployed. It cannot answer the bundler question, because ERC-7562's
+rules for factories are enforced **off-chain** by the bundler.
+
+**`script/bundler_userop.py`** answers that one, against the live Arbitrum Sepolia deployment.
+
+```bash
+python3 script/bundler_userop.py estimate           # bundler validation; spends nothing
+python3 script/bundler_userop.py simulate           # eth_call of handleOps; spends nothing
+python3 script/bundler_userop.py send               # broadcast; needs the sender funded
+python3 script/bundler_userop.py receipt <opHash>   # poll and read back chain state
+```
+
+Every mode prints the sender's balance next to the prefund the declared gas limits require, so the
+one failure this harness kept producing is visible before it is paid for.
+
+It requires `cast` on the path and Python's `cryptography` package, and reads
+`ARBITRUM_SEPOLIA_RPC_URL`, `BUNDLER_URL` and `OWNER_P256_KEY` from the environment — all three have
+defaults, and the default key is a fixed test scalar that must never hold anything.
+
+It reads the repository's `.env` itself, since only `forge` gets that for free, with real
+environment variables taking precedence over the file.
+
+Three details worth knowing before changing it:
+
+- **The userOpHash comes from the chain, not from this repository.** EntryPoint v0.9 hashes a
+  UserOperation with EIP-712, so the script calls `entryPoint.getUserOpHash` rather than
+  reimplementing it. A local reimplementation that drifted would produce signatures that fail only
+  in production.
+- **`simulate` uses an `eth_call` state override** to give the counterfactual sender a balance. That
+  covers the prefund without a transaction, so the whole path — factory, initialisation, P-256
+  verification through RIP-7212, and `configure()` — is exercised for free against the deployed
+  contracts. A wrong key reverts, so a clean result is meaningful rather than vacuous.
+- **`estimate` is signature-blind.** Bundlers accept a dummy signature when estimating, so a clean
+  estimate says the factory was accepted and says nothing about the signature. Use `simulate` for
+  the signature.
+- **`send` refuses to broadcast an underfunded operation, and does not trust its own success.** It
+  aborts locally when the balance is below the required prefund rather than paying a bundler to
+  return `AA21`; after the operation mines it re-reads `eth_getCode(sender)` and
+  `DeadManSwitch.recordOf(sender)`, because a bundler accepting an operation and the operation
+  having done its job are two different claims. `receipt` runs that same read-back on its own, for
+  when the poll window expires while the op is still pending.
+
+The stake question this settles is recorded in
+[`p256-account/README.md` § The factory needs no EntryPoint stake](https://github.com/CrypleLLC/p256-account#the-factory-needs-no-entrypoint-stake),
+along with the result of the real send on 2026-08-17.
+
+### The unsponsored path needs the address funded before it holds code
+
+With no paymaster the account pays its own prefund, so ETH has to reach the counterfactual address
+*before* the deploying operation. **Measured on 2026-08-17**, deploy-plus-configure burned
+**660,006 gas** and cost **0.0000792 ETH**.
+
+**Size the transfer against the declared gas limits, not against that cost.** The EntryPoint demands
+`(verificationGasLimit + callGasLimit + preVerificationGas) × maxFeePerGas` in hand before it starts
+— with this harness's limits, 3,300,000 × 0.2 gwei = **0.00066 ETH**, eight times what the operation
+actually spent. Fund for the cost and the send fails with `AA21` while holding more than enough ETH
+to have paid for itself.
+
+Nothing is lost to the gap: the unspent prefund lands in the account's EntryPoint **deposit** rather
+than its balance, where it is withdrawable with `withdrawTo` and spendable on later `checkIn()`
+operations. The run above left 0.00058 ETH there.
+
+**The cost figure is the least durable number here.** The EntryPoint charges
+`min(maxFeePerGas, baseFee + maxPriorityFeePerGas)`, and the base fee at execution was 0.02002 gwei
+against a 0.2 gwei ceiling — so the same operation at the ceiling costs about **0.000132 ETH**.
+Budget from the gas number.
+
+With sponsorship (Task 50) the funding step disappears entirely, which is why that task and this one
+share a dependency.
+
 ## Gas sponsorship
 
-The account is an ERC-4337 account bound to **EntryPoint v0.9** at
-`0x433709009B8330FDa32311DF1C2AFA402eD8D009` — the address OpenZeppelin's `Account` returns, the
-version this repository vendors, and a contract that is deployed on Arbitrum Sepolia. Pimlico's
-public bundler for chain 421614 lists it in `eth_supportedEntryPoints`, so no change to the account
-is needed to use a hosted bundler or sponsorship policy.
+The account is an ERC-4337 account bound to **EntryPoint v0.8** at
+`0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108`, set by an `entryPoint()` override in `P256Account`
+that returns `ERC4337Utils.ENTRYPOINT_V08` instead of OpenZeppelin's `Account` default of v0.9.
+
+**Bundler support does not imply paymaster support, and assuming it cost a round-trip.** Pimlico's
+bundler for chain 421614 lists v0.9 in `eth_supportedEntryPoints`, and this section previously
+concluded from that alone that no account change was needed for sponsorship. It was wrong: bundling
+and sponsoring are separate services, and a verifying paymaster is deployed per EntryPoint version.
+Against a live key and policy, `pm_getPaymasterStubData` answers v0.7 and v0.8 with stub data and
+rejects v0.9 with **"Paymaster is not enabled for this EntryPoint version"**. The version is
+therefore chosen by what the *paymaster* supports, not the bundler.
+
+**Nothing in this protocol used a v0.9-only feature.** `PackedUserOperation` is byte-identical
+between the two versions, EIP-7702 support exists in both, and RIP-7212 is a precompile that owes
+nothing to the EntryPoint. What v0.9 adds and this codebase never referenced: the optional
+`paymasterSignature` appended to `paymasterAndData`, `getCurrentUserOpHash()`, the `Stakeable`
+helper, and a handful of finer-grained errors and events. The one real cost of v0.8 is thinner
+revert data on some paymaster and beneficiary failure paths.
 
 [`test/SponsoredCheckIn.t.sol`](test/SponsoredCheckIn.t.sol) proves the mechanism against the **live
 chain** rather than a local EntryPoint: an account holding zero wei, with no deposit of its own,
@@ -168,6 +263,56 @@ forge test --match-contract SponsoredCheckIn    # needs ARBITRUM_SEPOLIA_RPC_URL
 
 The test skips itself when that variable is unset, so `forge test` stays green on a machine or CI
 job without an endpoint.
+
+### What the test cannot prove, and what is needed to close it
+
+The paymaster in that test is `TestPaymasterAcceptAll`, deployed and funded inside the fork. It
+proves the **EntryPoint accounting** — that a zero-balance account can be paid for — and it cannot
+prove that a *hosted* sponsor will agree to pay, because that decision is a policy on someone
+else's server.
+
+Probed against Pimlico's public endpoint on 2026-08-17, the `pm_*` methods are routed but
+unsponsored:
+
+```
+pm_getPaymasterStubData -> "Sponsorship policy ID is required for this API key"
+```
+
+That error is the whole remaining gap, and it is an account signup rather than any code change. Two
+environment variables turn it on:
+
+| Variable | Meaning |
+| --- | --- |
+| `PIMLICO_API_KEY` | project key; the harness routes `pm_*` to `api.pimlico.io` when set |
+| `PIMLICO_SPONSORSHIP_POLICY_ID` | the policy that decides what gets paid for |
+
+```bash
+python3 script/bundler_userop.py sponsor      # ERC-7677 stub -> estimate -> final -> send
+```
+
+**Scope the policy to contract addresses if the provider allows it, and to a spend cap regardless.**
+A policy that sponsors any target turns the paymaster into a public faucet for arbitrary calldata,
+since anyone may deploy a `P256Account` through the same factory. Pimlico's documented policy schema
+covers chain ids, date bounds and spend limits; target-address scoping is a dashboard/webhook
+feature whose exact form should be read off the dashboard rather than assumed from here. On testnet
+the spend cap is sufficient; **on Arbitrum One target scoping is not optional.** The three targets
+this protocol needs are:
+
+| Address | Why |
+| --- | --- |
+| `0x6951a65CDc706A2D23E1015d35B8353F18A569a9` | `DeadManSwitch` — `configure`, `checkIn` |
+| `0xd344197975C4D47f97dDB1d26b91a96be6e83930` | `ProofRegistry` — `anchor` |
+| `0x67b0cfF584B13E9275Ffc2cA6EBb2e94546D595b` | `P256AccountFactory` — first-operation deployment |
+
+The factory entry is what makes a **fresh** account sponsorable. Without it the very first
+operation — the one the user has no ETH for and no way to fund — is the one that gets refused, and
+sponsorship helps only users who already needed no help.
+
+`sponsor` adapts to the account's state: an undeployed sender gets `initCode` plus `configure()`,
+an already-configured one gets `checkIn()`. Point it at a fresh `OWNER_P256_KEY` to exercise the
+zero-ETH path from nothing. It verifies sponsorship by **arithmetic rather than by trust** — the
+sender's balance and EntryPoint deposit must both be unchanged and zero afterwards, so an operation
+that quietly paid for itself is reported as a failure, not a success.
 
 ### An account must always be able to pay for itself
 

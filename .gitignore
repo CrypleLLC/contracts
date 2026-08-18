@@ -4,6 +4,9 @@
 cache/
 out/
 
+# Python harness bytecode
+__pycache__/
+
 # Commonly ignored directories
 .logs/
 .ignore/

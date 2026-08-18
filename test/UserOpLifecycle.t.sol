@@ -44,7 +44,7 @@ contract UserOpLifecycleTest is Test {
     uint32 internal constant INACTIVITY = 180 days;
     uint32 internal constant CONTEST = 7 days;
 
-    address internal constant CANONICAL_ENTRYPOINT = 0x433709009B8330FDa32311DF1C2AFA402eD8D009;
+    address internal constant CANONICAL_ENTRYPOINT = 0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108;
 
     uint256 internal constant N = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551;
     uint256 internal constant HALF_N = 0x7fffffff800000007fffffffffffffffde737d56d38bcf4279dce5617e3192a8;

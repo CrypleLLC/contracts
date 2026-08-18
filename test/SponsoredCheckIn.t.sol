@@ -27,7 +27,7 @@ import {DeadManSwitch} from "../src/DeadManSwitch.sol";
 // local copy that happens to agree. Skipped when ARBITRUM_SEPOLIA_RPC_URL is
 // unset, so it never breaks a machine or a CI job without an endpoint.
 contract SponsoredCheckInTest is Test {
-    IEntryPoint internal constant ENTRYPOINT_V09 = IEntryPoint(0x433709009B8330FDa32311DF1C2AFA402eD8D009);
+    IEntryPoint internal constant ENTRYPOINT_V08 = IEntryPoint(0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108);
 
     P256AccountFactory internal factory;
     P256Account internal account;
@@ -60,7 +60,7 @@ contract SponsoredCheckInTest is Test {
 
         vm.deal(sponsor, 1 ether);
         vm.startPrank(sponsor, sponsor);
-        paymaster = new TestPaymasterAcceptAll(ENTRYPOINT_V09);
+        paymaster = new TestPaymasterAcceptAll(ENTRYPOINT_V08);
         paymaster.deposit{value: 0.5 ether}();
         vm.stopPrank();
     }
@@ -69,9 +69,9 @@ contract SponsoredCheckInTest is Test {
         _skipWithoutFork();
 
         assertEq(address(account).balance, 0, "the account must start with no ETH");
-        assertEq(ENTRYPOINT_V09.balanceOf(address(account)), 0, "and no EntryPoint deposit of its own");
+        assertEq(ENTRYPOINT_V08.balanceOf(address(account)), 0, "and no EntryPoint deposit of its own");
 
-        uint256 paymasterBefore = ENTRYPOINT_V09.balanceOf(address(paymaster));
+        uint256 paymasterBefore = ENTRYPOINT_V08.balanceOf(address(paymaster));
 
         _sendSponsored(abi.encodeCall(DeadManSwitch.configure, (INACTIVITY, CONTEST, bytes32(0), 0)));
 
@@ -84,9 +84,9 @@ contract SponsoredCheckInTest is Test {
         assertEq(dms.recordOf(address(account)).lastCheckIn, uint64(block.timestamp));
 
         assertEq(address(account).balance, 0, "the account must never have needed ETH");
-        assertEq(ENTRYPOINT_V09.balanceOf(address(account)), 0, "nor a deposit");
+        assertEq(ENTRYPOINT_V08.balanceOf(address(account)), 0, "nor a deposit");
         assertLt(
-            ENTRYPOINT_V09.balanceOf(address(paymaster)), paymasterBefore, "the paymaster must be the one that paid"
+            ENTRYPOINT_V08.balanceOf(address(paymaster)), paymasterBefore, "the paymaster must be the one that paid"
         );
     }
 
@@ -97,12 +97,12 @@ contract SponsoredCheckInTest is Test {
 
         vm.deal(address(account), 1 ether);
         vm.prank(address(account));
-        ENTRYPOINT_V09.depositTo{value: 0.5 ether}(address(account));
+        ENTRYPOINT_V08.depositTo{value: 0.5 ether}(address(account));
 
         _send(abi.encodeCall(DeadManSwitch.configure, (INACTIVITY, CONTEST, bytes32(0), 0)), "");
 
         assertEq(uint8(dms.statusOf(address(account))), uint8(DeadManSwitch.Status.Active));
-        assertLt(ENTRYPOINT_V09.balanceOf(address(account)), 0.5 ether, "the account paid for itself");
+        assertLt(ENTRYPOINT_V08.balanceOf(address(account)), 0.5 ether, "the account paid for itself");
     }
 
     // The EntryPoint the account hardcodes is the one actually deployed here,
@@ -110,8 +110,8 @@ contract SponsoredCheckInTest is Test {
     function test_TheHardcodedEntryPointIsDeployedAndIsTheAccountsOwn() public {
         _skipWithoutFork();
 
-        assertGt(address(ENTRYPOINT_V09).code.length, 0, "EntryPoint v0.9 must exist on this chain");
-        assertEq(address(account.entryPoint()), address(ENTRYPOINT_V09));
+        assertGt(address(ENTRYPOINT_V08).code.length, 0, "EntryPoint v0.8 must exist on this chain");
+        assertEq(address(account.entryPoint()), address(ENTRYPOINT_V08));
     }
 
     function _skipWithoutFork() private {
@@ -125,13 +125,13 @@ contract SponsoredCheckInTest is Test {
 
     function _send(bytes memory innerCall, bytes memory paymasterAndData) private {
         PackedUserOperation memory op = _build(innerCall, paymasterAndData);
-        op.signature = _sign(PEDRO_KEY, ENTRYPOINT_V09.getUserOpHash(op));
+        op.signature = _sign(PEDRO_KEY, ENTRYPOINT_V08.getUserOpHash(op));
 
         PackedUserOperation[] memory ops = new PackedUserOperation[](1);
         ops[0] = op;
 
         vm.prank(bundler, bundler);
-        ENTRYPOINT_V09.handleOps(ops, payable(bundler));
+        ENTRYPOINT_V08.handleOps(ops, payable(bundler));
     }
 
     function _build(bytes memory innerCall, bytes memory paymasterAndData)
@@ -153,7 +153,7 @@ contract SponsoredCheckInTest is Test {
 
         return PackedUserOperation({
             sender: address(account),
-            nonce: ENTRYPOINT_V09.getNonce(address(account), 0),
+            nonce: ENTRYPOINT_V08.getNonce(address(account), 0),
             initCode: "",
             callData: abi.encodeCall(IERC7821.execute, (mode, ERC7579Utils.encodeBatch(batch))),
             accountGasLimits: bytes32((uint256(1_000_000) << 128) | uint256(1_000_000)),
