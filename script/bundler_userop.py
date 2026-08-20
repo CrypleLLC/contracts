@@ -29,13 +29,17 @@ load_dotenv()
 CHAIN_ID = 421614
 
 RPC_URL = os.environ.get("ARBITRUM_SEPOLIA_RPC_URL", "https://sepolia-rollup.arbitrum.io/rpc")
-BUNDLER_URL = os.environ.get("BUNDLER_URL", f"https://public.pimlico.io/v2/{CHAIN_ID}/rpc")
+BUNDLER_URL = os.environ.get("BUNDLER_URL") or (
+    f"https://api.pimlico.io/v2/{CHAIN_ID}/rpc?apikey={os.environ.get('PIMLICO_API_KEY')}"
+    if os.environ.get("PIMLICO_API_KEY")
+    else f"https://public.pimlico.io/v2/{CHAIN_ID}/rpc"
+)
 
 PAYMASTER_API_KEY = os.environ.get("PIMLICO_API_KEY", "")
 SPONSORSHIP_POLICY_ID = os.environ.get("PIMLICO_SPONSORSHIP_POLICY_ID", "")
 
 ENTRY_POINT = "0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108"
-FACTORY = "0x67b0cfF584B13E9275Ffc2cA6EBb2e94546D595b"
+FACTORY = "0xa2Cd247C12f087450f4991c92e6FBc7cE015a527"
 DEAD_MAN_SWITCH = "0x6951a65CDc706A2D23E1015d35B8353F18A569a9"
 
 INACTIVITY_PERIOD = 600
@@ -48,9 +52,20 @@ ERC7821_SINGLE_BATCH_MODE = "0x0100000000000000000000000000000000000000000000000
 
 DUMMY_SIGNATURE = "0x" + "11" * 64
 
-VERIFICATION_GAS_LIMIT = 2_000_000
-CALL_GAS_LIMIT = 1_000_000
-PRE_VERIFICATION_GAS = 300_000
+PROBE_VERIFICATION_GAS_LIMIT = 2_000_000
+PROBE_CALL_GAS_LIMIT = 1_000_000
+PROBE_PRE_VERIFICATION_GAS = 300_000
+
+MIN_VERIFICATION_GAS_LIMIT = 50_000
+MIN_CALL_GAS_LIMIT = 10_000
+MIN_PRE_VERIFICATION_GAS = 21_000
+
+EXECUTION_GAS_HEADROOM = 1.25
+PRE_VERIFICATION_GAS_HEADROOM = 1.15
+
+VERIFICATION_GAS_LIMIT = PROBE_VERIFICATION_GAS_LIMIT
+CALL_GAS_LIMIT = PROBE_CALL_GAS_LIMIT
+PRE_VERIFICATION_GAS = PROBE_PRE_VERIFICATION_GAS
 
 
 def cast(*args: str) -> str:
@@ -227,6 +242,73 @@ def rpc(url: str, method: str, params: list) -> dict:
             return {"error": {"code": failure.code, "message": body[:500]}}
 
 
+def stamp_gas_limits(op: dict) -> dict:
+    op["verificationGasLimit"] = hex(VERIFICATION_GAS_LIMIT)
+    op["callGasLimit"] = hex(CALL_GAS_LIMIT)
+    op["preVerificationGas"] = hex(PRE_VERIFICATION_GAS)
+
+    return op
+
+
+def declared(field: str, estimated: str | None, headroom: float, minimum: int) -> int:
+    with_headroom = 0 if estimated is None else int(int(estimated, 16) * headroom)
+    if with_headroom < minimum:
+        raise RuntimeError(
+            f"bundler answered {field} = {estimated}, which cannot run this operation; "
+            "the public endpoint returns this when rate limited"
+        )
+
+    return with_headroom
+
+
+def measure_gas_limits(op: dict) -> bool:
+    global VERIFICATION_GAS_LIMIT, CALL_GAS_LIMIT, PRE_VERIFICATION_GAS
+
+    probe = dict(op)
+    probe["verificationGasLimit"] = hex(PROBE_VERIFICATION_GAS_LIMIT)
+    probe["callGasLimit"] = hex(PROBE_CALL_GAS_LIMIT)
+    probe["preVerificationGas"] = hex(PROBE_PRE_VERIFICATION_GAS)
+    probe["signature"] = DUMMY_SIGNATURE
+
+    answer = rpc(
+        BUNDLER_URL,
+        "eth_estimateUserOperationGas",
+        [probe, ENTRY_POINT, {op["sender"]: {"balance": hex(10**18)}}],
+    )
+    if "error" in answer:
+        print(f"gas measured     unavailable, declaring ceilings: {redact(json.dumps(answer['error']))}")
+
+        return False
+
+    result = answer["result"]
+    VERIFICATION_GAS_LIMIT = declared(
+        "verificationGasLimit",
+        result.get("verificationGasLimit"),
+        EXECUTION_GAS_HEADROOM,
+        MIN_VERIFICATION_GAS_LIMIT,
+    )
+    CALL_GAS_LIMIT = declared(
+        "callGasLimit",
+        result.get("callGasLimit"),
+        EXECUTION_GAS_HEADROOM,
+        MIN_CALL_GAS_LIMIT,
+    )
+    PRE_VERIFICATION_GAS = declared(
+        "preVerificationGas",
+        result.get("preVerificationGas"),
+        PRE_VERIFICATION_GAS_HEADROOM,
+        MIN_PRE_VERIFICATION_GAS,
+    )
+
+    declared = VERIFICATION_GAS_LIMIT + CALL_GAS_LIMIT + PRE_VERIFICATION_GAS
+    print(
+        f"gas measured     verification {VERIFICATION_GAS_LIMIT:,} call {CALL_GAS_LIMIT:,} "
+        f"preVerification {PRE_VERIFICATION_GAS:,} declared {declared:,}"
+    )
+
+    return True
+
+
 def required_prefund() -> int:
     return (VERIFICATION_GAS_LIMIT + CALL_GAS_LIMIT + PRE_VERIFICATION_GAS) * GAS_FEES[1]
 
@@ -259,15 +341,15 @@ def build(signature: str) -> tuple[dict, str, str]:
         "factory": FACTORY,
         "factoryData": data,
         "callData": call_data,
-        "callGasLimit": hex(CALL_GAS_LIMIT),
-        "verificationGasLimit": hex(VERIFICATION_GAS_LIMIT),
-        "preVerificationGas": hex(PRE_VERIFICATION_GAS),
         "maxFeePerGas": hex(GAS_FEES[1]),
         "maxPriorityFeePerGas": hex(GAS_FEES[0]),
         "signature": signature,
     }
 
-    return op, init_code, call_data
+    if not is_deployed(sender):
+        measure_gas_limits(op)
+
+    return stamp_gas_limits(op), init_code, call_data
 
 
 def sponsor_context() -> dict:
@@ -294,9 +376,6 @@ def build_sponsored(key, sender: str) -> tuple[dict, str, str] | None:
         "sender": sender,
         "nonce": hex(nonce),
         "callData": call_data,
-        "callGasLimit": hex(CALL_GAS_LIMIT),
-        "verificationGasLimit": hex(VERIFICATION_GAS_LIMIT),
-        "preVerificationGas": hex(PRE_VERIFICATION_GAS),
         "maxFeePerGas": hex(GAS_FEES[1]),
         "maxPriorityFeePerGas": hex(GAS_FEES[0]),
         "signature": DUMMY_SIGNATURE,
@@ -312,6 +391,9 @@ def build_sponsored(key, sender: str) -> tuple[dict, str, str] | None:
 
     inner = "checkIn()" if check_in else "configure()"
     print(f"operation        {inner if deployed else 'deploy + ' + inner}")
+
+    measure_gas_limits(op)
+    stamp_gas_limits(op)
 
     stub = request_paymaster("pm_getPaymasterStubData", op)
     if stub is None:

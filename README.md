@@ -185,7 +185,7 @@ environment variables taking precedence over the file.
 
 Three details worth knowing before changing it:
 
-- **The userOpHash comes from the chain, not from this repository.** EntryPoint v0.9 hashes a
+- **The userOpHash comes from the chain, not from this repository.** EntryPoint v0.8 hashes a
   UserOperation with EIP-712, so the script calls `entryPoint.getUserOpHash` rather than
   reimplementing it. A local reimplementation that drifted would produce signatures that fail only
   in production.
@@ -210,18 +210,45 @@ along with the result of the real send on 2026-08-17.
 ### The unsponsored path needs the address funded before it holds code
 
 With no paymaster the account pays its own prefund, so ETH has to reach the counterfactual address
-*before* the deploying operation. **Measured on 2026-08-17**, deploy-plus-configure burned
-**660,006 gas** and cost **0.0000792 ETH**.
+*before* the deploying operation. **Re-measured on EntryPoint v0.8, 2026-08-19**, deploy-plus-configure
+burns **654,529 gas** and cost **0.0000786 ETH** — the 660,006 figure recorded on 2026-08-17 was
+measured on v0.9 against the old implementation and is superseded. The version change was worth
+0.8%; the declared limits below were worth far more.
 
 **Size the transfer against the declared gas limits, not against that cost.** The EntryPoint demands
-`(verificationGasLimit + callGasLimit + preVerificationGas) × maxFeePerGas` in hand before it starts
-— with this harness's limits, 3,300,000 × 0.2 gwei = **0.00066 ETH**, eight times what the operation
-actually spent. Fund for the cost and the send fails with `AA21` while holding more than enough ETH
-to have paid for itself.
+`(verificationGasLimit + callGasLimit + preVerificationGas) × maxFeePerGas` in hand before it starts.
+Fund for the cost and the send fails with `AA21` while holding more than enough ETH to have paid for
+itself.
+
+### The declared limits are measured, not constants
+
+The harness used to declare a flat 3,300,000 gas, which demanded 0.00066 ETH of prefund for an
+operation that spends a tenth of it — and made the paymaster price every sponsored operation off that
+figure. `measure_gas_limits` now calls `eth_estimateUserOperationGas` before every send and declares
+the result plus headroom.
+
+| Operation | declared before | declared now | prefund at 0.2 gwei |
+| --- | --- | --- | --- |
+| deploy + `configure()` | 3,300,000 | ~613,000 | 0.00066 → **0.000123 ETH** |
+| `checkIn()` | 3,300,000 | ~265,000 | 0.00066 → **0.000053 ETH** |
+
+**The headroom differs by field because the refund rules do.** Unused `verificationGasLimit` and
+`callGasLimit` are refunded, so headroom there costs only a larger prefund requirement — they carry
+`EXECUTION_GAS_HEADROOM`, 1.25. **`preVerificationGas` is charged in full as declared, used or not**,
+so every unit of headroom is spent; it carries `PRE_VERIFICATION_GAS_HEADROOM`, 1.15. Declaring
+300,000 there against a real requirement near 127,000 is where most of the old waste sat: it is why
+the on-chain operation was billed 654,529 gas for roughly 373,000 gas of measured work.
+
+**`preVerificationGas` cannot be hardcoded lower on Arbitrum.** It embeds the L1 data-availability
+fee, so it moves with the L1 base fee — observed between 51,802 and 147,188 for the same operation.
+A constant tuned to a quiet L1 turns into a rejected operation on a busy one, which is why this is
+measured per-send rather than lowered. `PROBE_*` are the ceilings used for the estimate call itself,
+and remain the declared values when the bundler cannot be reached.
 
 Nothing is lost to the gap: the unspent prefund lands in the account's EntryPoint **deposit** rather
 than its balance, where it is withdrawable with `withdrawTo` and spendable on later `checkIn()`
-operations. The run above left 0.00058 ETH there.
+operations. The 2026-08-17 run left 0.00058 ETH there; under measured limits the same gap is about
+0.00004 ETH, so the deposit no longer quietly absorbs most of what a user transferred.
 
 **The cost figure is the least durable number here.** The EntryPoint charges
 `min(maxFeePerGas, baseFee + maxPriorityFeePerGas)`, and the base fee at execution was 0.02002 gwei
@@ -302,7 +329,7 @@ this protocol needs are:
 | --- | --- |
 | `0x6951a65CDc706A2D23E1015d35B8353F18A569a9` | `DeadManSwitch` — `configure`, `checkIn` |
 | `0xd344197975C4D47f97dDB1d26b91a96be6e83930` | `ProofRegistry` — `anchor` |
-| `0x67b0cfF584B13E9275Ffc2cA6EBb2e94546D595b` | `P256AccountFactory` — first-operation deployment |
+| `0xa2Cd247C12f087450f4991c92e6FBc7cE015a527` | `P256AccountFactory` — first-operation deployment |
 
 The factory entry is what makes a **fresh** account sponsorable. Without it the very first
 operation — the one the user has no ETH for and no way to fund — is the one that gets refused, and
